@@ -15,19 +15,31 @@ from math import log
 import altair as alt
 
 st.set_page_config(layout="wide")
-
+H = 800
 
 # =========== SETTING UP ==================
 db = list(srsly.read_jsonl('data/snomed_db.jsonl'))
 ids = [c['conceptId'] for c in db]
-df_freq = pd.read_csv('data/snomed_id2name.csv') # frequency
-df_wc = pd.read_csv('data/snomed_mean_word_count.csv', 
-                    names=['fullname', 'wc'], header=0).sort_values(by='wc', ascending=False) # word count
+
 
 def getConceptById(id):
     for c in db:
         if c['conceptId'] == id:
             return c
+        
+        
+df_freq = pd.read_csv('data/snomed_id2name.csv') # frequency
+df_freq['fullname'] = None
+for i in range(len(df_freq)):
+    id = df_freq.loc[i, 'smid']
+    c = getConceptById(str(id))
+    if c:
+        df_freq.loc[i, 'fullname'] = c['fsn']['term']
+
+df_wc = pd.read_csv('data/snomed_mean_word_count.csv', 
+                    names=['fullname', 'wc'], header=0).sort_values(by='wc', ascending=False) # word count
+df = df_freq.merge(df_wc, left_on='fullname', right_on='fullname')
+
 
 def getConceptByName(name):
     for c in db:
@@ -64,7 +76,7 @@ def load_data(df_freq, T_freq):
 	inter = set(df_rm.fullname).intersection(set(tinas))
 	return df_freq, df_wc, inter
 
-def construct_graph(ids, inter, df_wc, scale):
+def construct_graph(ids, inter, df, scale, by):
 	G = nx.Graph()
 	for id in tqdm(ids):
 		node = getConceptById(str(id)) # get a concept by its id
@@ -72,10 +84,10 @@ def construct_graph(ids, inter, df_wc, scale):
 		if root not in list(inter):
 			continue
 		
-		root_wc = df_wc.loc[df_wc.fullname==root, 'wc'].values[0]
+		root_ = df.loc[df['fullname']==root, by].values[0]
 		G.add_node(root, label=node['pt']['term'], 
-             		title=f"{node['pt']['term']}\n{int(root_wc)}", 
-					size=root_wc*scale)
+             		title=f"{node['pt']['term']}\n{int(root_)}", 
+					size=root_*scale)
 		
 		for i, r in enumerate(node['relationships']):
 			if r['characteristicType'] == 'STATED_RELATIONSHIP':
@@ -85,10 +97,10 @@ def construct_graph(ids, inter, df_wc, scale):
 
 				# Construct graph
 				if child_name in list(inter):
-					child_wc = df_wc.loc[df_wc.fullname==child_name, 'wc'].values[0]
+					child_ = df.loc[df['fullname']==child_name, by].values[0]
 					G.add_node(child_name, label=child['pt']['term'], 
-                				title=f"{child['pt']['term']}\n{int(child_wc)}",
-								size=child_wc*scale)
+                				title=f"{child['pt']['term']}\n{int(child_)}",
+								size=child_*scale)
 					G.add_edge(root,child_name)
 	return G
 
@@ -98,9 +110,9 @@ def update_size(g, scale):
         
     
 # ============== GRAPH ==================
-def make_graph_visualiser():
-	G = construct_graph(ids, inter, df_wc, scale=1)
-	g = Network(height='1000px', width='100%')
+def make_graph_visualiser(by):
+	G = construct_graph(ids, inter, df, scale=1, by=by)
+	g = Network(height=str(H)+'px', width='100%')
 	g.from_nx(G)
 	#g.show('snomed_wc.html')
 	return g, G
@@ -161,9 +173,9 @@ def coloring_all(g):
 st.title("MEH SNOMED Knowledge Graph")
 
 with st.sidebar:
-    #st.selectbox(
-    #    'Graph type by:', 
-    #    ('Letter length', 'Node connectivity'))
+    gtype = st.selectbox(
+        'Graph type by:', 
+        ('Letter length', 'Disease prevalence'))
     
     min_freq = int(min(list(df_freq.freq.values)))
     max_freq = int(max(list(df_freq.freq.values))/10)
@@ -174,7 +186,7 @@ with st.sidebar:
     
     scale = st.slider(
 		label='Select scale (node size/scale)',
-     	min_value=1, max_value=10, 
+     	min_value=1, max_value=100, 
       	value=4, step=1)
     
     
@@ -186,19 +198,24 @@ st.write("This knowledge graph illustrates the average length of clinical letter
         "A larger node means that the disease was often described in more detailed in the clinical letters. "\
         "A subset of four disease groups was highlighted: `Cataract` (magneta), `Glaucoma` (green), `Infectious` (black), "\
         "and `Hereditary` (red, you might need to lower the frequency cutoff to see this group)")
-
+st.write('Hover a node to see more data')
 
 # ------------
 st.markdown('### **The Graph**')
 
 # load data, change color and update size
 df_freq, df_wc, inter = load_data(df_freq, T_freq)
-g, G = make_graph_visualiser()
+
+if gtype == 'Letter length':
+	g, G = make_graph_visualiser('wc')
+elif gtype == 'Disease prevalence':
+    g, G = make_graph_visualiser('freq')
+    
 g = coloring_all(g)
 update_size(g, scale)
 
 # Show graph
-components.html(g.generate_html(), height=1000)
+components.html(g.generate_html(), height=H)
 
 st.write('Number of nodes: ', G.number_of_nodes())
 st.write('Number of edges: ', G.number_of_edges())
